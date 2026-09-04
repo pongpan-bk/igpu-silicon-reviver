@@ -1,27 +1,64 @@
-name: 🚀 Intel iGPU Silicon Awake Core Builder
+name: 🚀 Intel iGPU Silicon Revive Core Builder
 
 on:
   push:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+  workflow_dispatch:
 
 jobs:
-  build-and-verify:
-    runs-on: macos-latest
+  build-kext:
+    # Intel runner so the x86_64 kernel kext builds natively, mirroring the
+    # target Hackintosh. arm64 runners can cross-compile but the Intel
+    # toolchain most closely matches the real build machine.
+    runs-on: macos-13
 
     steps:
     - name: 📥 Clone Repository Source
       uses: actions/checkout@v4
 
-    - name: 🛠️ Compile Core VCS Bridge (strict C binary)
+    - name: 🔧 Setup Xcode Command Line Tools
       run: |
-        echo "Starting Enterprise Grade Hardware Acceleration Build..."
-        make libmyintelvcs.dylib || echo "Skipping complex kext link overheads for core bridge evaluation"
+        echo "=== Runner arch (expect x86_64) ==="
+        uname -m
+        echo ""
+        echo "=== Xcode toolchain ==="
+        xcode-select --print-path
+        xcrun --show-sdk-path
+        clang --version | head -1
 
-    - name: 📊 Proof of Core Awakening Status
+    - name: 🛠️ Kernel headers (fallback to MacOSKernelSDK if SDK drops them)
       run: |
-        echo "=== [PONGPAN iGPU TECH LABS] QUALITY ASSURANCE REPORT ==="
-        echo "[STATUS] All decoded flags: 100% matched with POC guidelines."
-        echo "[BENCH] RESULT ok=20 fail=0 avg=2.43ms fps=411.8"
-        echo "🟢 Verification: Hardware Pipeline Stably Awoken."
+        if [ ! -d /Library/Developer/CommandLineTools/SDKs/MacOSX.sdk/System/Library/Frameworks/Kernel.framework/Headers ]; then
+          echo "Kernel.framework headers missing - cloning MacOSKernelSDK"
+          sudo mkdir -p /opt/MacKernelSDK
+          sudo git clone --depth 1 https://github.com/acidanthera/MacOSKernelSDK /opt/MacKernelSDK
+        else
+          echo "Kernel.framework headers present - using built-in SDK headers"
+        fi
+
+    - name: ⚙️ Compile MyIntelGPU.kext
+      run: |
+        make clean || true
+        make
+        make version
+
+    - name: ✅ Verify kext bundle
+      run: |
+        echo "=== Bundled kext ==="
+        find MyIntelGPU.kext -type f
+        echo ""
+        echo "=== PlistBuddy sanity check ==="
+        /usr/libexec/PlistBuddy -c "Print :CFBundleVersion" MyIntelGPU.kext/Contents/Info.plist
+        /usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" MyIntelGPU.kext/Contents/Info.plist
+        echo ""
+        echo "=== Binary ==="
+        file MyIntelGPU.kext/Contents/MacOS/MyIntelGPU
+
+    - name: 📦 Upload kext artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: MyIntelGPU.kext
+        path: MyIntelGPU.kext
+        if-no-files-found: error
